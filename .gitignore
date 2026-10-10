@@ -11,4 +11,6 @@ Package.resolved.orig
 /exports
 *.mov
 *.mp4
-!docs/**
+!docs/**/*.mov
+!docs/**/*.mp4
+/*.png
