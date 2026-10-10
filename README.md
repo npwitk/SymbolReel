@@ -42,10 +42,12 @@ symbolreel signature -e draw-on -f prores,mp4 --color "#007AFF"
 ```sh
 git clone https://github.com/npwitk/SymbolReel.git
 cd SymbolReel
-make install            # builds a release binary and copies it to /usr/local/bin
+sudo make install                 # builds and copies the binary to /usr/local/bin
+# or, without sudo:
+make install PREFIX=~/.local      # then add ~/.local/bin to your PATH
 ```
 
-Or run it in place with `swift run symbolreel …`.
+Or run it in place with `swift run -c release symbolreel …` or `.build/release/symbolreel …`.
 
 ## Usage
 

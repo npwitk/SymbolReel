@@ -7,7 +7,7 @@ build:
 	swift build -c release --disable-sandbox
 
 install: build
-	install -d "$(PREFIX)/bin"
+	mkdir -p "$(PREFIX)/bin"
 	install -m 755 ".build/release/$(BINARY)" "$(PREFIX)/bin/$(BINARY)"
 
 uninstall:
