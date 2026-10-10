@@ -1,0 +1,14 @@
+.DS_Store
+/.build
+/.swiftpm
+/Packages
+*.xcodeproj
+xcuserdata/
+DerivedData/
+Package.resolved.orig
+
+# Rendered output from local testing
+/exports
+*.mov
+*.mp4
+!docs/**
