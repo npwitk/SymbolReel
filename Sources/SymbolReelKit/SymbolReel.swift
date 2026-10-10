@@ -24,12 +24,10 @@ public enum SymbolReel {
     public static func render(_ request: RenderRequest, to outputs: [OutputTarget]) throws(SymbolReelError) -> Result {
         try validate(request)
 
-        let effect = request.effect
         let timing = request.timing
         let fps = timing.framesPerSecond
 
-        let stage = try SymbolStage(request: request)
-        try stage.prepare(effect)
+        let stage = try SymbolStage(request: request, options: effectOptions(for: request), isEndless: isEndless(request))
 
         var sinks: [any FrameSink] = []
         var frameCount = 0
@@ -46,27 +44,39 @@ public enum SymbolReel {
             }
 
             // Hold the resting symbol before the effect starts.
-            var lastFrame = stage.snapshot()
-            try emit(lastFrame, times: frames(timing.leadIn, fps: fps))
+            var heldFrame = stage.snapshot().image
+            try emit(heldFrame, times: frames(timing.leadIn, fps: fps))
 
-            let startTime = try stage.start(effect, options: effectOptions(for: request))
+            stage.start()
 
-            // Sample the animation at exact frame times, independent of how fast frames render.
+            // Step the animation one exact frame interval at a time. Without a fixed duration, the
+            // effect is over once the picture stops changing; those trailing still frames are
+            // dropped so `tail` alone decides how long the end is held.
             let fixedFrameCount = effectDuration(for: request).map { frames($0, fps: fps) }
             let frameLimit = fixedFrameCount ?? frames(Timing.maximumAutomaticDuration, fps: fps)
+            let settleFrameCount = max(1, frames(settleDuration(for: request), fps: fps))
+            var unchangedFrameCount = 0
 
-            for index in 0..<frameLimit {
-                let isAnimating = stage.advance(to: startTime + Double(index) / Double(fps))
-                lastFrame = stage.snapshot()
-                try emit(lastFrame)
+            for _ in 0..<frameLimit {
+                stage.advance()
+                let (frame, changed) = stage.snapshot()
 
-                if fixedFrameCount == nil, index > 0, !isAnimating {
-                    break
+                if fixedFrameCount != nil {
+                    heldFrame = frame
+                    try emit(frame)
+                } else if changed {
+                    try emit(heldFrame, times: unchangedFrameCount)
+                    try emit(frame)
+                    heldFrame = frame
+                    unchangedFrameCount = 0
+                } else {
+                    unchangedFrameCount += 1
+                    if unchangedFrameCount >= settleFrameCount { break }
                 }
             }
 
             // Hold the final state.
-            try emit(lastFrame, times: frames(timing.tail, fps: fps))
+            try emit(heldFrame, times: frames(timing.tail, fps: fps))
 
             for sink in sinks { try sink.finish() }
         } catch {
@@ -127,10 +137,20 @@ public enum SymbolReel {
         }
     }
 
+    private static func isEndless(_ request: RenderRequest) -> Bool {
+        request.effect.kind.isRepeatable && request.timing.repeatBehavior == .forever
+    }
+
+    /// How long the picture must stay still before the effect counts as finished. Pauses between
+    /// repetitions are still, so they extend it.
+    private static func settleDuration(for request: RenderRequest) -> Double {
+        0.5 + (request.timing.repeatDelay ?? 0)
+    }
+
     /// The fixed length of the effect section, or `nil` to stop once the symbol settles.
     private static func effectDuration(for request: RenderRequest) -> Double? {
         if let duration = request.timing.duration { return duration }
-        if request.effect.kind.isRepeatable, request.timing.repeatBehavior == .forever {
+        if isEndless(request) {
             return Timing.defaultEndlessDuration
         }
         return nil

@@ -25,10 +25,11 @@ symbolreel signature -e draw-on -f prores,mp4 --color "#007AFF"
   disappear, draw on, draw off and replace (including Magic Replace), with all their options.
 - **Transparent video**: ProRes 4444 and HEVC with alpha, ready for Final Cut Pro, Motion,
   After Effects, Premiere, DaVinci Resolve and Keynote.
-- **Frame-accurate**: frames are sampled at exact timestamps instead of being screen-recorded, so
-  output is smooth at any frame rate and resolution, including 4K and 120 fps.
-- **Real system rendering**: animations come from the same AppKit and RenderBox code that SF
-  Symbols and your apps use.
+- **Frame-accurate and reproducible**: frames are rendered at exact timestamps instead of being
+  screen-recorded, so output is smooth at any frame rate and resolution (including 4K and
+  120 fps), and the same command always produces identical frames.
+- **Real system rendering**: animations come from SwiftUI's own symbol effects, so they look the
+  same as in the SF Symbols app and in your apps, including Magic Replace.
 - **Batch friendly**: render several symbols, effects and formats in one command.
 
 ## Requirements
@@ -165,25 +166,28 @@ try await MainActor.run {
 }
 ```
 
-Rendering uses AppKit, so it runs on the main actor in a process with a main run loop.
+Rendering uses SwiftUI and AppKit, so it runs on the main actor.
 
 ## How it works
 
-1. An `NSImageView` in an offscreen window displays the symbol, and the real effect is added with
-   the public `addSymbolEffect` and `setSymbolImage(_:contentTransition:)` APIs.
-2. AppKit animates symbols with a private RenderBox layer (`RBSymbolLayer`), which normally follows
-   the display's refresh. SymbolReel calls that layer's `runAnimationAtTime:` once per frame
-   timestamp instead, so every frame is evaluated at an exact time.
+1. A SwiftUI `Image` in an offscreen `NSHostingView` shows the symbol and applies the effect with
+   the standard modifiers: `symbolEffect(_:options:value:)` for effects that play once,
+   `symbolEffect(_:options:isActive:)` for endless ones, `.transition(.symbolEffect(…))` for
+   appear, disappear and the draw effects, and `contentTransition(.symbolEffect(…))` for replace.
+2. SymbolReel advances SwiftUI's animation clock by exactly one frame at a time with
+   `NSHostingView._renderForTest(interval:)`, the hook SwiftUI uses in its own performance tests.
+   That makes output independent of how fast the Mac renders, and identical from run to run.
 3. Each frame is drawn with `CALayer.render(in:)` into a bitmap with premultiplied alpha, then
    encoded with AVFoundation (ProRes and HEVC alpha are tagged as premultiplied) or ImageIO.
+4. Without `--duration`, an effect is considered finished once the picture stops changing for half
+   a second. Those still frames are trimmed, so `--tail` alone controls how long the end is held.
 
-Step 2 relies on a private method, isolated in
-[`SymbolAnimationClock.swift`](Sources/SymbolReelKit/Rendering/SymbolAnimationClock.swift). If a
-future macOS removes it, SymbolReel stops with a clear error rather than writing bad video.
-Because of this, SymbolReel is a developer tool and isn't suitable for the Mac App Store.
+`_renderForTest(interval:)` is public but underscored, meaning Apple doesn't promise it will stay
+stable. It's the only such API SymbolReel uses.
 
-The effect's start time is taken from the system clock when AppKit registers the effect, so
-repeated renders match to within about a millisecond of animation phase but aren't bit-identical.
+Rendering through SwiftUI matters for content transitions. `NSImageView` lays out `bell` and
+`bell.slash` by their full image bounds, so the bell jumps and leaves a ghost image during a Magic
+Replace. SwiftUI keeps symbols on a shared baseline, like the SF Symbols app.
 
 ## Limitations
 

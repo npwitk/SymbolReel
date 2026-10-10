@@ -1,133 +1,109 @@
 import AppKit
-import Symbols
+import SwiftUI
 
-/// Hosts an `NSImageView` in an offscreen window and draws it into bitmaps.
+/// Hosts the symbol in an offscreen SwiftUI view and renders it one frame at a time.
+///
+/// `NSHostingView._renderForTest(interval:)` advances SwiftUI's animation clock by an exact
+/// interval and renders synchronously. SwiftUI uses it in its own performance tests. Stepping
+/// with it makes every frame land on an exact timestamp, so output is identical from run to run
+/// and independent of how fast the Mac renders.
 @MainActor
 final class SymbolStage {
-    private let view: NSImageView
-    /// The symbol to transition to, for content transitions such as `replace`.
-    private let targetImage: NSImage?
+    private let host: NSHostingView<SymbolScene>
     private let window: NSWindow
-    private var clock: SymbolAnimationClock?
+    private let state: SceneState
+    private let effect: SymbolEffectSpec
     private let canvas: Canvas
+    private let frameInterval: Double
     private let context: CGContext
+    private var previousFrame: [UInt8] = []
 
-    init(request: RenderRequest) throws(SymbolReelError) {
+    init(request: RenderRequest, options: SymbolEffectOptions, isEndless: Bool) throws(SymbolReelError) {
         Self.bootstrapApplication()
 
+        effect = request.effect
         canvas = request.canvas
-        let appearance = request.appearance
-        let image = try Self.symbolImage(named: request.symbolName, variableValue: appearance.variableValue)
-        targetImage = try request.targetSymbolName.map { name throws(SymbolReelError) in
-            try Self.symbolImage(named: name, variableValue: appearance.variableValue)
+        frameInterval = 1 / Double(request.timing.framesPerSecond)
+
+        let symbolNames = [request.symbolName] + [request.targetSymbolName].compactMap(\.self)
+        for name in symbolNames where NSImage(systemSymbolName: name, accessibilityDescription: nil) == nil {
+            throw .unknownSymbol(name)
         }
 
-        let frame = NSRect(x: 0, y: 0, width: canvas.width, height: canvas.height)
-
-        view = NSImageView(frame: frame)
-        view.wantsLayer = true
-        view.imageScaling = .scaleNone
-        view.imageAlignment = NSImageAlignment(rawValue: UInt(ProcessInfo.processInfo.environment["DBG_ALIGN"] ?? "0")!)!
-        view.contentTintColor = appearance.colors.first?.nsColor
-        view.image = image
-
-        // The window is never shown; it gives the view a layer-backed hierarchy to draw into.
-        window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = view
-
-        guard let context = CGContext(
-            data: nil,
-            width: canvas.width,
-            height: canvas.height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
-        ) else {
+        guard let context = Self.makeContext(width: canvas.width, height: canvas.height) else {
             throw .invalidRequest("Couldn't create a \(canvas.width)×\(canvas.height) drawing context.")
         }
         self.context = context
 
-        fitSymbol(images: [image] + [targetImage].compactMap(\.self), appearance: appearance)
-        view.image = image
+        let canvasSize = CGSize(width: canvas.width, height: canvas.height)
+        let pointSize = Self.fittingPointSize(for: symbolNames, appearance: request.appearance, canvas: canvas)
+
+        // Effects that bring the symbol into view start with it hidden.
+        state = SceneState(isVisible: ![.appear, .drawOn].contains(effect.kind))
+        host = NSHostingView(rootView: SymbolScene(
+            symbolName: request.symbolName,
+            targetSymbolName: request.targetSymbolName,
+            effect: effect,
+            options: options,
+            isEndless: isEndless,
+            appearance: request.appearance,
+            pointSize: pointSize,
+            canvasSize: canvasSize,
+            state: state
+        ))
+        window = Self.mount(host, size: canvasSize)
+        host._renderForTest(interval: frameInterval)
     }
 
-    /// Puts the symbol into the state the effect starts from, ready to animate.
-    func prepare(_ effect: SymbolEffectSpec) throws(SymbolReelError) {
-        try effect.prepare(view)
-        settle()
-
-        // The first effect added to a view makes AppKit install the animatable symbol layer and
-        // build the glyph's animation data, which takes several milliseconds. Do that with a
-        // throwaway effect now, so adding the real effect is quick and its start time is precise.
-        view.addSymbolEffect(.bounce, options: .nonRepeating)
-        let clock = try SymbolAnimationClock(view: view)
-        clock.advance(to: CACurrentMediaTime())
-        clock.layOut()
-
-        view.removeAllSymbolEffects(animated: false)
-        try effect.prepare(view)
-        clock.advance(to: CACurrentMediaTime())
-        clock.layOut()
-        self.clock = clock
-    }
-
-    /// Adds the effect and returns the media time its animation starts at.
-    func start(_ effect: SymbolEffectSpec, options: SymbolEffectOptions) throws(SymbolReelError) -> CFTimeInterval {
-        clock?.advance(to: CACurrentMediaTime())
-        try effect.start(on: view, target: targetImage, options: options)
-        if ProcessInfo.processInfo.environment["DBG_LAYOUT"] != nil {
-            view.layoutSubtreeIfNeeded()
-            view.layer?.layoutIfNeeded()
-        }
-
-        let clock = try SymbolAnimationClock(view: view)
-        self.clock = clock
-        clock.advance(to: CACurrentMediaTime())
-
-        // The effect is registered during layout, stamped with the media time at that moment.
-        let startTime = CACurrentMediaTime()
-        clock.layOut()
-
-        // Layout reads the clock a few microseconds after `startTime`. Sampling slightly later keeps
-        // the first frame from landing before the effect begins.
-        return startTime + Self.startTimeTolerance
-    }
-
-    /// Evaluates the effect at `time` and returns whether it's still in motion.
-    func advance(to time: CFTimeInterval) -> Bool {
-        guard let clock else { return false }
-        clock.advance(to: time)
-        return clock.isAnimating
-    }
-
-    private static let startTimeTolerance: CFTimeInterval = 0.001
-
-    /// Lets AppKit commit the view's layer tree.
-    ///
-    /// Symbol effects only animate once the symbol has been displayed at least once.
-    private func settle() {
-        view.layoutSubtreeIfNeeded()
-        view.displayIfNeeded()
-        for _ in 0..<3 {
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+    /// Changes the scene's state to play the effect. It animates over the following frames.
+    func start() {
+        withAnimation {
+            switch effect.kind {
+            case .scale:
+                state.isActive = true
+            case .appear, .drawOn:
+                state.isVisible = true
+            case .disappear, .drawOff:
+                state.isVisible = false
+            case .replace:
+                state.showsTarget = true
+            case .bounce, .pulse, .variableColor, .wiggle, .rotate, .breathe:
+                state.isActive = true
+                state.trigger += 1
+            }
         }
     }
 
-    /// Draws the view's current state into a new image.
-    func snapshot() -> CGImage {
+    /// Advances the animation by one frame interval.
+    func advance() {
+        host._renderForTest(interval: frameInterval)
+    }
+
+    /// Draws the current state into a new image, and reports whether it differs from the last one.
+    func snapshot() -> (image: CGImage, changed: Bool) {
         let bounds = CGRect(x: 0, y: 0, width: canvas.width, height: canvas.height)
         context.clear(bounds)
         if let background = canvas.background {
             context.setFillColor(background.cgColor)
             context.fill(bounds)
         }
-        view.layer?.render(in: context)
-        return context.makeImage()!
+        context.saveGState()
+        // The hosting view is flipped; Core Graphics contexts aren't.
+        context.translateBy(x: 0, y: bounds.height)
+        context.scaleBy(x: 1, y: -1)
+        host.layer?.render(in: context)
+        context.restoreGState()
+
+        let byteCount = context.bytesPerRow * context.height
+        let pixels = UnsafeBufferPointer(start: context.data!.assumingMemoryBound(to: UInt8.self), count: byteCount)
+        let changed = !previousFrame.elementsEqual(pixels)
+        if changed {
+            previousFrame = Array(pixels)
+        }
+        return (context.makeImage()!, changed)
     }
 
-    // MARK: - Setup helpers
+    // MARK: - Setup
 
     private static func bootstrapApplication() {
         let application = NSApplication.shared
@@ -136,62 +112,70 @@ final class SymbolStage {
         }
     }
 
-    private static func symbolImage(named name: String, variableValue: Double?) throws(SymbolReelError) -> NSImage {
-        let image = if let variableValue {
-            NSImage(systemSymbolName: name, variableValue: variableValue, accessibilityDescription: nil)
-        } else {
-            NSImage(systemSymbolName: name, accessibilityDescription: nil)
-        }
-        guard let image else { throw .unknownSymbol(name) }
-        return image
+    /// Puts a view in a window that's never shown, giving it a layer tree to render.
+    private static func mount(_ view: NSView, size: CGSize) -> NSWindow {
+        view.frame = NSRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: view.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        return window
     }
 
-    private static func configuration(for appearance: SymbolAppearance, pointSize: CGFloat) -> NSImage.SymbolConfiguration {
-        let base = NSImage.SymbolConfiguration(pointSize: pointSize, weight: appearance.weight, scale: appearance.scale)
-        let colors = appearance.colors.map(\.nsColor)
-
-        return switch appearance.renderingMode {
-        case .monochrome:
-            base.applying(.preferringMonochrome())
-        case .hierarchical:
-            base.applying(.init(hierarchicalColor: colors.first ?? .black))
-        case .palette:
-            base.applying(.init(paletteColors: colors.isEmpty ? [.black] : colors))
-        case .multicolor:
-            base.applying(.preferringMulticolor())
-        }
+    private static func makeContext(width: Int, height: Int) -> CGContext? {
+        CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
+        )
     }
 
-    /// Sizes the symbol so the largest of `images` fills the canvas inside the padding.
+    /// Picks the point size that makes the drawn shape of the largest symbol fill the canvas
+    /// inside the padding.
     ///
-    /// A symbol's image size includes alignment margins, so the drawn pixels are measured instead:
-    /// each image is rendered once at a reference size and scaled to fit.
-    private func fitSymbol(images: [NSImage], appearance: SymbolAppearance) {
+    /// A symbol's layout bounds include alignment margins, so each symbol is rendered once at a
+    /// reference size and its drawn pixels are measured instead.
+    private static func fittingPointSize(for symbolNames: [String], appearance: SymbolAppearance, canvas: Canvas) -> CGFloat {
         let inset = CGFloat(canvas.padding) * CGFloat(min(canvas.width, canvas.height))
         let available = CGSize(width: CGFloat(canvas.width) - 2 * inset, height: CGFloat(canvas.height) - 2 * inset)
         let referencePointSize = CGFloat(min(canvas.width, canvas.height)) / 4
+        let canvasSize = CGSize(width: canvas.width, height: canvas.height)
 
-        view.symbolConfiguration = Self.configuration(for: appearance, pointSize: referencePointSize)
         var factor = CGFloat.greatestFiniteMagnitude
-        for image in images {
-            view.image = image
-            settle()
-            guard let ink = inkBounds() else { continue }
-            factor = min(factor, available.width / ink.width, available.height / ink.height)
+        for name in symbolNames {
+            let view = NSHostingView(rootView: SymbolScene(
+                symbolName: name,
+                targetSymbolName: nil,
+                effect: SymbolEffectSpec(kind: .pulse),
+                options: .default,
+                isEndless: false,
+                appearance: appearance,
+                pointSize: referencePointSize,
+                canvasSize: canvasSize,
+                state: SceneState(isVisible: true)
+            ))
+            let window = mount(view, size: canvasSize)
+            view._renderForTest(interval: 0)
+            if let ink = inkBounds(of: view, size: canvasSize) {
+                factor = min(factor, available.width / ink.width, available.height / ink.height)
+            }
+            window.contentView = nil
         }
         if factor == .greatestFiniteMagnitude { factor = 1 }
-
-        view.symbolConfiguration = Self.configuration(for: appearance, pointSize: max(1, (referencePointSize * factor).rounded(.down)))
+        return max(1, (referencePointSize * factor).rounded(.down))
     }
 
-    /// The bounds of the pixels the view currently draws, ignoring the background.
-    private func inkBounds() -> CGRect? {
-        let width = canvas.width, height = canvas.height
+    /// The bounds of the pixels a view draws.
+    private static func inkBounds(of view: NSView, size: CGSize) -> CGRect? {
+        let width = Int(size.width), height = Int(size.height)
         guard let mask = CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
             space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue
-        ) else { return nil }
-        view.layer?.render(in: mask)
+        ), let layer = view.layer else { return nil }
+        layer.render(in: mask)
 
         guard let data = mask.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
         var minX = width, minY = height, maxX = -1, maxY = -1
