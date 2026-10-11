@@ -28,3 +28,22 @@ struct FormatsCommand: ParsableCommand {
         }
     }
 }
+
+struct CustomSymbolsCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "custom-symbols",
+        abstract: "List the custom symbols in the SF Symbols app on this Mac."
+    )
+
+    func run() {
+        let symbols = CustomSymbolLibrary.symbols()
+        guard !symbols.isEmpty else {
+            print("The SF Symbols app has no custom symbols on this Mac.")
+            return
+        }
+        print("Render any of these by name. Each one is compiled with Xcode's actool the first time it's used.\n")
+        for symbol in symbols {
+            print(symbol.name)
+        }
+    }
+}

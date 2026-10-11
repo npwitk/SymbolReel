@@ -21,8 +21,8 @@ final class SceneState {
 
 /// Draws the symbol and applies the requested effect the same way an app would in SwiftUI.
 struct SymbolScene: View {
-    let symbolName: String
-    let targetSymbolName: String?
+    let symbol: ResolvedSymbol
+    let targetSymbol: ResolvedSymbol?
     let effect: SymbolEffectSpec
     let options: SymbolEffectOptions
     /// Whether the effect loops until stopped rather than playing a fixed number of times.
@@ -41,13 +41,13 @@ struct SymbolScene: View {
         .frame(width: canvasSize.width, height: canvasSize.height)
     }
 
-    private var currentSymbolName: String {
-        state.showsTarget ? (targetSymbolName ?? symbolName) : symbolName
+    private var currentSymbol: ResolvedSymbol {
+        state.showsTarget ? (targetSymbol ?? symbol) : symbol
     }
 
     @ViewBuilder
     private var animatedSymbol: some View {
-        let image = styled(symbol(named: currentSymbolName))
+        let image = styled(image(of: currentSymbol))
 
         switch effect.kind {
         case .bounce:
@@ -109,11 +109,11 @@ struct SymbolScene: View {
         }
     }
 
-    private func symbol(named name: String) -> Image {
-        if let variableValue = appearance.variableValue {
-            Image(systemName: name, variableValue: variableValue)
+    private func image(of symbol: ResolvedSymbol) -> Image {
+        if let bundle = symbol.bundle {
+            Image(symbol.name, variableValue: appearance.variableValue, bundle: bundle)
         } else {
-            Image(systemName: name)
+            Image(systemName: symbol.name, variableValue: appearance.variableValue)
         }
     }
 

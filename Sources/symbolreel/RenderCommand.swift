@@ -8,7 +8,7 @@ struct RenderCommand: ParsableCommand {
         abstract: "Render one or more symbols with one or more effects."
     )
 
-    @Argument(help: "The SF Symbols to render, e.g. wifi or heart.fill.")
+    @Argument(help: "The symbols to render: SF Symbol names such as wifi, custom symbols from the SF Symbols app (see `symbolreel custom-symbols`), or paths to exported .svg templates.")
     var symbols: [String]
 
     @Option(name: .shortAndLong, help: "An effect to render; repeat for several. See `symbolreel effects`. (default: bounce)", transform: parseEffect)
@@ -66,7 +66,7 @@ struct RenderCommand: ParsableCommand {
                 let result = try SymbolReel.render(request, to: targets)
                 guard !quiet else { continue }
 
-                let title = [request.symbolName, request.targetSymbolName].compactMap(\.self).joined(separator: " → ")
+                let title = [request.symbolName, request.targetSymbolName].compactMap(\.self).map(SymbolReference.displayName).joined(separator: " → ")
                 print("✓ \(title) · \(request.effect) · \(result.frameCount) frames, \(String(format: "%.2f", result.duration)) s")
                 for target in targets {
                     print("    \(target.url.relativePath)")

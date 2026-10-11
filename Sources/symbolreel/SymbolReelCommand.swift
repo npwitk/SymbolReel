@@ -11,9 +11,11 @@ struct SymbolReelCommand: ParsableCommand {
           symbolreel signature -e draw-on -f prores,mp4 --color "#FF9500"
           symbolreel bell.fill heart.fill -e bounce -e wiggle --repeat 3 -o exports
           symbolreel wifi -e replace.magic --to wifi.slash -f hevc-alpha
+          symbolreel custom.gift.fill -e wiggle --rendering multicolor
+          symbolreel ~/Desktop/logo.svg -e draw-on
         """,
         version: "0.1.0",
-        subcommands: [RenderCommand.self, EffectsCommand.self, FormatsCommand.self],
+        subcommands: [RenderCommand.self, EffectsCommand.self, FormatsCommand.self, CustomSymbolsCommand.self],
         defaultSubcommand: RenderCommand.self
     )
 }

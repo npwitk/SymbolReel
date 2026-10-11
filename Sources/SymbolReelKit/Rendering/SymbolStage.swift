@@ -25,10 +25,9 @@ final class SymbolStage {
         canvas = request.canvas
         frameInterval = 1 / Double(request.timing.framesPerSecond)
 
-        let symbolNames = [request.symbolName] + [request.targetSymbolName].compactMap(\.self)
-        for name in symbolNames where NSImage(systemSymbolName: name, accessibilityDescription: nil) == nil {
-            throw .unknownSymbol(name)
-        }
+        let symbols = try ResolvedSymbol.resolve([request.symbolName] + [request.targetSymbolName].compactMap(\.self))
+        let symbol = symbols[0]
+        let targetSymbol = symbols.count > 1 ? symbols[1] : nil
 
         guard let context = Self.makeContext(width: canvas.width, height: canvas.height) else {
             throw .invalidRequest("Couldn't create a \(canvas.width)×\(canvas.height) drawing context.")
@@ -36,13 +35,13 @@ final class SymbolStage {
         self.context = context
 
         let canvasSize = CGSize(width: canvas.width, height: canvas.height)
-        let pointSize = Self.fittingPointSize(for: symbolNames, appearance: request.appearance, canvas: canvas)
+        let pointSize = Self.fittingPointSize(for: symbols, appearance: request.appearance, canvas: canvas)
 
         // Effects that bring the symbol into view start with it hidden.
         state = SceneState(isVisible: ![.appear, .drawOn].contains(effect.kind))
         host = NSHostingView(rootView: SymbolScene(
-            symbolName: request.symbolName,
-            targetSymbolName: request.targetSymbolName,
+            symbol: symbol,
+            targetSymbol: targetSymbol,
             effect: effect,
             options: options,
             isEndless: isEndless,
@@ -138,17 +137,17 @@ final class SymbolStage {
     ///
     /// A symbol's layout bounds include alignment margins, so each symbol is rendered once at a
     /// reference size and its drawn pixels are measured instead.
-    private static func fittingPointSize(for symbolNames: [String], appearance: SymbolAppearance, canvas: Canvas) -> CGFloat {
+    private static func fittingPointSize(for symbols: [ResolvedSymbol], appearance: SymbolAppearance, canvas: Canvas) -> CGFloat {
         let inset = CGFloat(canvas.padding) * CGFloat(min(canvas.width, canvas.height))
         let available = CGSize(width: CGFloat(canvas.width) - 2 * inset, height: CGFloat(canvas.height) - 2 * inset)
         let referencePointSize = CGFloat(min(canvas.width, canvas.height)) / 4
         let canvasSize = CGSize(width: canvas.width, height: canvas.height)
 
         var factor = CGFloat.greatestFiniteMagnitude
-        for name in symbolNames {
+        for symbol in symbols {
             let view = NSHostingView(rootView: SymbolScene(
-                symbolName: name,
-                targetSymbolName: nil,
+                symbol: symbol,
+                targetSymbol: nil,
                 effect: SymbolEffectSpec(kind: .pulse),
                 options: .default,
                 isEndless: false,

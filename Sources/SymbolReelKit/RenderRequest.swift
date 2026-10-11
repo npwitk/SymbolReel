@@ -2,7 +2,8 @@ import AppKit
 
 /// Everything needed to render one symbol animation.
 public struct RenderRequest: Sendable {
-    /// The SF Symbol to animate, e.g. `"wifi"`.
+    /// The symbol to animate: a system symbol such as `"wifi"`, a custom symbol from the SF Symbols
+    /// app's library, or the path to an SVG template exported from the SF Symbols app.
     public var symbolName: String
     public var effect: SymbolEffectSpec
     /// The symbol to transition to; required for content transitions like `replace`.
@@ -29,8 +30,8 @@ public struct RenderRequest: Sendable {
 
     /// A filesystem-friendly base name such as `wifi_variable-color-iterative`.
     public var suggestedBaseName: String {
-        var name = "\(symbolName)_\(effect.slug)"
-        if let targetSymbolName { name += "_to_\(targetSymbolName)" }
+        var name = "\(SymbolReference.displayName(symbolName))_\(effect.slug)"
+        if let targetSymbolName { name += "_to_\(SymbolReference.displayName(targetSymbolName))" }
         return name
     }
 }

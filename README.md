@@ -30,12 +30,14 @@ symbolreel signature -e draw-on -f prores,mp4 --color "#007AFF"
   120 fps), and the same command always produces identical frames.
 - **Real system rendering**: animations come from SwiftUI's own symbol effects, so they look the
   same as in the SF Symbols app and in your apps, including Magic Replace.
+- **Custom symbols**: render the custom symbols you've made in the SF Symbols app by name, or any
+  exported `.svg` symbol template by path.
 - **Batch friendly**: render several symbols, effects and formats in one command.
 
 ## Requirements
 
 - macOS 15 or later (Draw On and Draw Off need macOS 26 or later)
-- Xcode 26 or later to build
+- Xcode 26 or later to build, and to render custom symbols
 
 ## Installation
 
@@ -75,12 +77,35 @@ symbolreel person.crop.circle.badge.plus -e bounce.by-layer \
   --rendering palette --color "#FF2D55,#007AFF" --weight semibold \
   --size 1920x1080 --background "#F2F2F7" -f mp4
 
+# Custom symbols: by name from the SF Symbols app, or an exported template by path
+symbolreel custom-symbols
+symbolreel custom.gift.fill -e wiggle --rendering multicolor
+symbolreel ~/Desktop/logo.svg -e bounce
+
 # Write to an exact file path (one symbol, one effect, one format)
 symbolreel signature -e draw-off -f mov -o ~/Desktop/signature.mov
 ```
 
 Run `symbolreel effects` to list effects and their modifiers, `symbolreel formats` to list
-formats, and `symbolreel --help` for every option.
+formats, `symbolreel custom-symbols` to list your custom symbols, and `symbolreel --help` for every
+option.
+
+### Custom symbols
+
+A symbol argument (and `--to`) can be:
+
+1. A system symbol name, such as `wifi`.
+2. The name of a custom symbol in the SF Symbols app on this Mac, such as `custom.gift.fill`.
+3. A path to a symbol template exported from the SF Symbols app (anything ending in `.svg` or
+   containing `/`).
+
+Custom symbols are compiled into an asset catalog with Xcode's `actool`, exactly as they would be in
+an app, so their layers and annotations animate the same way. Each one takes a couple of seconds to
+compile the first time, then it's cached in `~/Library/Caches/SymbolReel`.
+
+Symbols that the SF Symbols app derives from another custom symbol, such as one with an added
+slash, aren't saved as templates in its library. Export them with **File › Export Symbol…** and
+pass the `.svg` path instead.
 
 ### Effects
 
@@ -193,7 +218,7 @@ Replace. SwiftUI keeps symbols on a shared baseline, like the SF Symbols app.
 
 ## Limitations
 
-- Only system symbols are supported for now. Custom symbols from an `.svg` template aren't yet.
+- Custom symbols need Xcode installed, because they're compiled with `actool`.
 - Draw On and Draw Off require macOS 26, and only work on symbols that include draw data.
 - GIF has no partial transparency, so GIFs are always drawn on a solid background.
 
