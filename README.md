@@ -107,6 +107,23 @@ Symbols that the SF Symbols app derives from another custom symbol, such as one 
 slash, aren't saved as templates in its library. Export them with **File › Export Symbol…** and
 pass the `.svg` path instead.
 
+#### Magic Replace with custom slashes
+
+```sh
+symbolreel server.rack -e replace.magic --to ~/Desktop/custom.server.rack.slash.svg
+```
+
+Magic Replace matches layers by their tags. When the SF Symbols app adds a slash to a custom
+symbol, it tags the base layer with that custom symbol's internal ID. Other symbols, including
+the system symbol it was made from, don't carry that ID, so the system treats the base as a
+different shape: it shrinks and grows while only the slash animates. Even the SF Symbols app
+animates it this way.
+
+SymbolReel lines the tags up before compiling: it drops the target's lineage tags that the
+source lacks, as long as the layer still shares a tag with the source. The base then stays in
+place while the slash draws on and cuts its gap, as between system symbols like `video` and
+`video.slash`. Symbols with nothing in common are left alone and use the regular replace.
+
 ### Effects
 
 Write an effect as its name followed by dot-separated modifiers, like `bounce.down.by-layer`.

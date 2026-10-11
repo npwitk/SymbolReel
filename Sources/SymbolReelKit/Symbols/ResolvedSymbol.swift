@@ -13,9 +13,9 @@ struct ResolvedSymbol: Hashable {
     /// A name can be a system symbol such as `wifi`, a custom symbol from the SF Symbols app's
     /// library, or the path to an SVG template exported from the SF Symbols app.
     ///
-    /// Custom symbols are compiled into one shared asset catalog. Magic Replace only matches the
-    /// layers of symbols from the same catalog, so a symbol and its slashed version must be compiled
-    /// together for the slash to draw on while the rest stays in place.
+    /// The first reference is the source symbol and the second, if any, the symbol it transitions
+    /// to. When the target is a custom symbol, its layer tags are lined up with the source's so Magic
+    /// Replace works as it does between system symbols (see `MagicReplaceTags`).
     static func resolve(_ references: [String]) throws(SymbolReelError) -> [ResolvedSymbol] {
         enum Pending {
             case system(String)
@@ -38,6 +38,20 @@ struct ResolvedSymbol: Hashable {
                 throw .unknownSymbol(reference)
             }
         }
+        if pending.count == 2, case .custom(let targetName) = pending[1],
+           let targetIndex = templates.firstIndex(where: { $0.name == targetName }) {
+            let sourceTags: Set<String>? = switch pending[0] {
+            // System symbols tag their layers with the symbol's name.
+            case .system(let name): [name]
+            // A symbol replacing itself has nothing to line up.
+            case .custom(let name) where name == targetName: nil
+            case .custom(let name): templates.first { $0.name == name }.map { Set(MagicReplaceTags.tagLists(in: $0.template).joined()) }
+            }
+            if let sourceTags {
+                templates[targetIndex].template = MagicReplaceTags.reconcile(target: templates[targetIndex].template, withSourceTags: sourceTags)
+            }
+        }
+
         let bundle = templates.isEmpty ? nil : try compile(templates)
         return pending.map { symbol in
             switch symbol {
